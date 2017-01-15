@@ -71,7 +71,7 @@ Func<object> BotStopActivity = () => null;
 Func<object> NextActivity = MainStep;
 
 //void Approach(Parse.IOverviewEntry overviewEntry) => executeApproach(overviewEntry);
-void approach(Parse.IOverviewEntry overviewEntry) {
+void approach(IUIElement overviewEntry) {
     if (AlwaysMove) {
     	executeOrbit(overviewEntry);
     } else {
@@ -342,7 +342,7 @@ Func<object> InBeltMineStep()
 
         ModuleToggle(moduleMinerInactive);
         if (AlwaysMove  && !moving) {
-            executeOrbit(setTargetAsteroidInRangeNotAssigned?.FirstOrDefault());
+            approach(setTargetAsteroidInRangeNotAssigned?.FirstOrDefault());
         }
 
         return InBeltMineStep;
@@ -391,11 +391,17 @@ Func<object> InBeltMineStep()
 }
 
 void executeApproach(IUIElement overviewEntry) {
-        ClickMenuEntryOnMenuRoot(overviewEntry, "approach");
+    ClickMenuEntryOnMenuRoot(overviewEntry, "approach");
 }
 
 void executeOrbit(IUIElement overviewEntry) {
-        ClickThroughMenuPath(overviewEntry, new string[] {"orbit", "500.*"});
+    Host.Log("Orbitting: " + overviewEntry?.Id);
+    Sanderling.MouseMove(overviewEntry);
+    Sanderling.KeyDown(VirtualKeyCode.VK_W);
+    Host.Delay(500);
+    Sanderling.MouseClickLeft(overviewEntry);
+    Sanderling.KeyUp(VirtualKeyCode.VK_W);
+    //ClickThroughMenuPath(overviewEntry, new string[] {"orbit", "500.*"});
 }
 
 void executeLock(IUIElement overviewEntry) {
@@ -568,24 +574,29 @@ void InInventoryUnloadItemsTo(string DestinationContainerName)
         var oreHoldListItem = WindowInventory?.SelectedRightInventory?.ListView?.Entry?.ToArray();
 
         var oreHoldItem = oreHoldListItem?.FirstOrDefault();
-
+        var itemsCount = oreHoldListItem?.Length;
+        IUIElement itemToDrag = oreHoldItem;
         if(null == oreHoldItem)
             break;    //    0 items in OreHold
 
-        if(1 < oreHoldListItem?.Length)
-            ClickMenuEntryOnMenuRoot(oreHoldItem, @"select\s*all");
-
         var DestinationContainerLabelRegexPattern =
             InventoryContainerLabelRegexPatternFromContainerName(DestinationContainerName);
-
         var DestinationContainer =
             WindowInventory?.LeftTreeListEntry?.SelectMany(entry => new[] { entry }.Concat(entry.EnumerateChildNodeTransitive()))
             ?.FirstOrDefault(entry => entry?.Text?.RegexMatchSuccessIgnoreCase(DestinationContainerLabelRegexPattern) ?? false);
-
         if (null == DestinationContainer)
             Host.Log("error: Inventory entry labeled '" + DestinationContainerName + "' not found");
 
-        Sanderling.MouseDragAndDrop(oreHoldItem, DestinationContainer);
+        var columnHeader = WindowInventory.SelectedRightInventory.ListView.ColumnHeader?.EmptyIfNull();
+				if (!columnHeader.Any()) // we're in icons view
+				{
+					itemsCount = oreHoldItem.LabelText.Count() / 2; // name and count
+					itemToDrag = oreHoldItem.LabelText.First(l => l.Text.Contains("center"));
+				}
+        if(1 < itemsCount)
+            ClickMenuEntryOnMenuRoot(oreHoldItem, @"select\s*all");
+
+        Sanderling.MouseDragAndDrop(itemToDrag, DestinationContainer);
     }
 }
 
@@ -621,16 +632,16 @@ bool InitiateDockToOrWarpToBookmark(string bookmarkOrFolder)
 
         var maneuverMenuEntry = dockMenuEntry ?? warpMenuEntry;
 
+        if (null != approachEntry)
+        {
+            Host.Log("found menu entry '" + approachEntry.Text + "'. Assuming we are already there.");
+            return false;
+        }
+
         if (null != maneuverMenuEntry)
         {
             Host.Log("initiating '" + maneuverMenuEntry.Text + "' on entry '" + currentLevelMenuEntry?.Text + "'");
             Sanderling.MouseClickLeft(maneuverMenuEntry);
-            return false;
-        }
-
-        if (null != approachEntry)
-        {
-            Host.Log("found menu entry '" + approachEntry.Text + "'. Assuming we are already there.");
             return false;
         }
 
