@@ -147,7 +147,8 @@ Func<object>    MainStep()
 {
     if(Measurement?.IsDocked ?? false)
     {
-        InInventoryUnloadItems();
+        if (!InInventoryUnloadItems())
+            return BotStopActivity;
 
         if (0 < RetreatReasonPermanent?.Length)
             return BotStopActivity;
@@ -544,7 +545,7 @@ void EnsureWindowInventoryOpen()
     Sanderling.MouseClickLeft(Measurement?.Neocom?.InventoryButton);
 }
 
-void EnsureWindowInventoryOpenOreHold()
+bool EnsureWindowInventoryOpenOreHold()
 {
     EnsureWindowInventoryOpen();
 
@@ -552,22 +553,30 @@ void EnsureWindowInventoryOpenOreHold()
 
     if(InventoryActiveShipOreHold == null && !(inventoryActiveShip?.IsExpanded ?? false))
         Sanderling.MouseClickLeft(inventoryActiveShip?.ExpandToggleButton);
+    if(InventoryActiveShipOreHold == null) {
+      Host.Log("No ore hold. Not mining ship?");
+      Host.Delay(5000);
+      return false;
+    }
 
     if(!(InventoryActiveShipOreHold?.IsSelected ?? false))
         Sanderling.MouseClickLeft(InventoryActiveShipOreHold);
+    return true;
 }
 
 //    sample label text: Intensive Reprocessing Array <color=#66FFFFFF>1,123 m</color>
 string InventoryContainerLabelRegexPatternFromContainerName(string containerName) =>
     @"^\s*" + Regex.Escape(containerName) + @"\s*($|\<)";
 
-void InInventoryUnloadItems() => InInventoryUnloadItemsTo(UnloadDestContainerName);
+bool InInventoryUnloadItems() => InInventoryUnloadItemsTo(UnloadDestContainerName);
 
-void InInventoryUnloadItemsTo(string DestinationContainerName)
+bool InInventoryUnloadItemsTo(string DestinationContainerName)
 {
     Host.Log("unload items to '" + DestinationContainerName + "'.");
 
-    EnsureWindowInventoryOpenOreHold();
+    if (!EnsureWindowInventoryOpenOreHold()) {
+      return false;
+    }
 
     for (;;)
     {
@@ -598,6 +607,7 @@ void InInventoryUnloadItemsTo(string DestinationContainerName)
 
         Sanderling.MouseDragAndDrop(itemToDrag, DestinationContainer);
     }
+    return true;
 }
 
 bool InitiateWarpToRandomMiningSite()    =>
