@@ -24,6 +24,7 @@ using static Sanderling.ShipManeuverTypeEnum;
 //    Bookmarks of places to mine. Add additional bookmarks separated by comma.
 string[] SetMiningSiteBookmark = new[] {
     "Mining",
+//    "Mining-Alt",
     };
 
 //    Bookmark of location where ore should be unloaded.
@@ -43,20 +44,21 @@ string OverviewTab = "Mining";
 
 //    The bot loads this preset to the active tab.
 string OverviewPreset = "Mining-Spec";
+//string OverviewPreset = "Mining-Site";
 //string OverviewPreset = "Mining";
 
 var ActivateHardener = true; // activate shield hardener.
 
 //    bot will start fighting (and stop mining) when hitpoints are lower.
-var DefenseEnterHitpointThresholdPercent = 85;
-var DefenseExitHitpointThresholdPercent = 90;
+var DefenseEnterHitpointThresholdPercent = 65;
+var DefenseExitHitpointThresholdPercent = 80;
 
 var EmergencyWarpOutHitpointPercent = 25;
-var WarpOutHitpointPercent = 45;
+var WarpOutHitpointPercent = 40;
 
 var FightAllRats = true;    //    when this is set to true, the bot will attack rats independent of shield hp.
 
-var EnterOffloadOreHoldFillPercent = 98;    //    percentage of ore hold fill level at which to enter the offload process.
+var EnterOffloadOreHoldFillPercent = 97;    //    percentage of ore hold fill level at which to enter the offload process.
 
 var RetreatOnNeutralOrHostileInLocal = false;   // warp to RetreatBookmark when a neutral or hostile is visible in local.
 
@@ -64,11 +66,33 @@ var RetreatOnNeutralOrHostileInLocal = false;   // warp to RetreatBookmark when 
 // less damage from rats and harder for gankers to kill
 var AlwaysMove = true;
 
+// todo: get it from ship's info
+var TargettingDistance = 16000;
+
+// asteroid preference model parameters
+Dictionary<string, double> asteroidValue = new Dictionary<string, double>();
+asteroidValue.Add("Kernite" , 2.29);
+asteroidValue.Add("Luminous Kernite" , asteroidValue["Kernite"] * 1.05);
+asteroidValue.Add("Fiery Kernite" , asteroidValue["Kernite"] * 1.1);
+asteroidValue.Add("Plagioclase" , 2.69);
+asteroidValue.Add("Azure Plagioclase" , asteroidValue["Plagioclase"] * 1.05);
+asteroidValue.Add("Rich Plagioclase" , asteroidValue["Plagioclase"] * 1.1);
+asteroidValue.Add("Jaspet" , 3.0);
+asteroidValue.Add("Pure Jaspet" , asteroidValue["Jaspet"] * 1.05);
+asteroidValue.Add("Pristine Jaspet" , asteroidValue["Jaspet"] * 1.1);
+asteroidValue.Add("Hemorphite" , 2.49);
+asteroidValue.Add("Radiant Hemorphite" , asteroidValue["Hemorphite"] * 1.1);
+asteroidValue.Add("Vivid Hemorphite" , asteroidValue["Hemorphite"] * 1.05);
+
+double distanceFineWeight = 0.000005;
+
 //    <- end of configuration section
 
 Func<object> BotStopActivity = () => null;
 
 Func<object> NextActivity = MainStep;
+
+int dockWarpCanceled = 0;
 
 //void Approach(Parse.IOverviewEntry overviewEntry) => executeApproach(overviewEntry);
 void approach(IUIElement overviewEntry) {
@@ -107,14 +131,18 @@ for(;;)
         continue;
     }
 
-    NextActivity = NextActivity?.Invoke() as Func<object>;
+    try
+    {
+        NextActivity = NextActivity?.Invoke() as Func<object>;
 
-    if(BotStopActivity == NextActivity)
-        break;
+        if(BotStopActivity == NextActivity)
+            break;
 
-    if(null == NextActivity)
-        NextActivity = MainStep;
-
+        if(null == NextActivity)
+            NextActivity = MainStep;
+    } catch (Exception e) {
+       Host.Log("Exception happened: " + e.ToString());
+    }
     Host.Delay(1111);
 }
 
@@ -125,13 +153,13 @@ int?    ShieldHpPercent => ShipUi?.HitpointsAndEnergy?.Shield / 10;
 
 bool    DefenseExit =>
     (Measurement?.IsDocked ?? false) ||
-    !(0 < ListRatOverviewEntry?.Length)    ||
+    (ListRatOverviewEntry?.Length <= 0) ||
     (DefenseExitHitpointThresholdPercent < ShieldHpPercent && !(JammedLastAge < 40) &&
     !(FightAllRats && 0 < ListRatOverviewEntry?.Length));
 
 bool    DefenseEnter =>
     !DefenseExit    ||
-    !(DefenseEnterHitpointThresholdPercent < ShieldHpPercent) || JammedLastAge < 10;
+    (ShieldHpPercent < DefenseEnterHitpointThresholdPercent) || JammedLastAge < 10;
 
 bool    OreHoldFilledForOffload => Math.Max(0, Math.Min(100, EnterOffloadOreHoldFillPercent)) <= OreHoldFillPercent;
 
@@ -143,7 +171,7 @@ int? LastCheckOreHoldFillPercent = null;
 
 int OffloadCount = 0;
 
-Func<object>    MainStep()
+Func<object> MainStep()
 {
     if(Measurement?.IsDocked ?? false)
     {
@@ -179,7 +207,7 @@ Func<object>    MainStep()
                 InitiateDockToOrWarpToBookmark(UnloadBookmark);
                 SetModuleMiner?.EmptyIfNull().Where(
                     miner => miner?.RampActive ?? false).ForEach(
-                    miner => ModuleToggle(miner));
+                    activeMiner => ModuleToggle(activeMiner));
             }
 
             if (UnloadInSpace)
@@ -255,7 +283,7 @@ void DroneReturnToBay()
 
 Func<object> DefenseStep()
 {
-    if(DefenseExit)
+    if(DefenseExit || !ReadyForManeuver)
     {
         Host.Log("exit defense.");
         return null;
@@ -271,10 +299,11 @@ Func<object> DefenseStep()
         ?.Distinct()
         ?.ToArray();
 
-    var SetRatTarget = Measurement?.Target?.Where(target =>
-        SetRatName?.Any(ratName => target?.TextRow?.Any(row => row.RegexMatchSuccessIgnoreCase(ratName)) ?? false) ?? false);
+    var SetRatTarget = Measurement?.Target?.Where(target => SetRatName?.Any(
+          ratName => target?.TextRow?.Any(row => row.RegexMatchSuccessIgnoreCase(ratName)) ?? false) ?? false);
 
-    var RatTargetNext = SetRatTarget?.OrderBy(target => target?.DistanceMax ?? int.MaxValue)?.FirstOrDefault();
+    var RatTargetNext = SetRatTarget?.Where(target => (target?.DistanceMax ?? int.MaxValue) <= TargettingDistance)
+          .OrderBy(target => target?.DistanceMax ?? int.MaxValue)?.FirstOrDefault();
 
     if(null == RatTargetNext)
     {
@@ -283,7 +312,6 @@ Func<object> DefenseStep()
                     rat => (rat.MeTargeted ?? false) || (rat.MeTargeting ?? false)).IsNullOrEmpty() ?? true;
         if (wouldTarget) {
             var rat = ListRatOverviewEntry?.FirstOrDefault();
-            //Host.Log("Locking (o). Id: " + rat.Id + "; InTreeIndex: " + rat.InTreeIndex + "; ChildLastInTreeIndex: " + rat.ChildLastInTreeIndex);
             executeLock(rat);
         }
     }
@@ -294,17 +322,19 @@ Func<object> DefenseStep()
         Sanderling.KeyboardPress(VirtualKeyCode.VK_F);
     }
 
-    return DefenseStep;
+    // we need to keep defending here,
+    // but it's better to interlieve defense with mining
+    return InBeltMineStep;
 }
-
-
 
 Func<object> InBeltMineStep()
 {
+    if (!ReadyForManeuver) return null;
+    Func<object> nextStep = null;
     if (DefenseEnter)
     {
         Host.Log("enter defense.");
-        return DefenseStep;
+        nextStep = DefenseStep;
     }
 
     EnsureWindowInventoryOpenOreHold();
@@ -318,12 +348,20 @@ Func<object> InBeltMineStep()
 
     if (null == moduleMinerInactive)
     {
-        Host.Delay(7777);
-        return InBeltMineStep;
+        if (nextStep == null)
+        {
+          var delay = ReevaluateTargettedRoids();
+          Host.Delay(delay);
+        }
+        return nextStep;
     }
 
     var maneuverType = Measurement?.ShipUi?.Indication?.ManeuverType;
     var moving = (maneuverType != null) && (maneuverType.Equals(Approach) || maneuverType == Orbit);
+
+    if (AlwaysMove  && !moving) {
+        approach(SetTargetAsteroid?.FirstOrDefault());
+    }
 
     var setTargetAsteroidInRange =
         SetTargetAsteroid?.Where(target => target?.DistanceMax <= MiningRange)?.ToArray();
@@ -331,26 +369,29 @@ Func<object> InBeltMineStep()
     var setTargetAsteroidInRangeNotAssigned =
         setTargetAsteroidInRange?.Where(target => !(0 < target?.Assigned?.Length))?.ToArray();
 
-    Host.Log("targeted asteroids in range (without assignment): " + setTargetAsteroidInRange?.Length + " (" + setTargetAsteroidInRangeNotAssigned?.Length + ")");
+    Host.Log("targeted asteroids in range (without assignment): " + setTargetAsteroidInRange?.Length +
+             " (" + setTargetAsteroidInRangeNotAssigned?.Length + ")");
 
     if(0 < setTargetAsteroidInRangeNotAssigned?.Length)
     {
-        var targetAsteroidInputFocus    =
+        var targetAsteroidInputFocus =
             setTargetAsteroidInRangeNotAssigned?.FirstOrDefault(target => target?.IsSelected ?? false);
 
         if(null == targetAsteroidInputFocus)
             Sanderling.MouseClickLeft(setTargetAsteroidInRangeNotAssigned?.FirstOrDefault());
 
         ModuleToggle(moduleMinerInactive);
-        if (AlwaysMove  && !moving) {
-            approach(setTargetAsteroidInRangeNotAssigned?.FirstOrDefault());
-        }
-
-        return InBeltMineStep;
+        return nextStep ?? InBeltMineStep;
     }
 
-    var asteroidOverviewEntryNext = ListAsteroidOverviewEntry?.FirstOrDefault();
-    var asteroidOverviewEntryNextNotTargeted = ListAsteroidOverviewEntry?.FirstOrDefault(entry => !((entry?.MeTargeted ?? false) || (entry?.MeTargeting ?? false)));
+    IEnumerable<Parse.IOverviewEntry> weightedAsters = ListAsteroidOverviewEntry?.OrderByDescending(aster =>
+            asteroidPreferenceWeight(OreTypeFromAsteroidName(aster.Name), 1.0*aster.DistanceMin ?? 0));
+    if (SetModuleMinerInactive.Length < SetModuleMiner.Length) // some miners already active
+    {
+      weightedAsters = RoidsInRange(weightedAsters);
+    }
+    var asteroidOverviewEntryNext = weightedAsters.FirstOrDefault();
+    var asteroidOverviewEntryNextNotTargeted = weightedAsters.FirstOrDefault(entry => !((entry?.MeTargeted ?? false) || (entry?.MeTargeting ?? false)));
 
     Host.Log("next asteroid: (" + asteroidOverviewEntryNext?.Name + " , distance: " + asteroidOverviewEntryNext?.DistanceMax + ")" +
         ", next asteroid not targeted: (" + asteroidOverviewEntryNextNotTargeted?.Name + " , distance: " + asteroidOverviewEntryNextNotTargeted?.DistanceMax + ")");
@@ -365,7 +406,7 @@ Func<object> InBeltMineStep()
     {
         Host.Log("all asteroids targeted");
         ModuleToggle(moduleMinerInactive);
-        return InBeltMineStep;
+        return nextStep ?? InBeltMineStep;
     }
 
     if (asteroidOverviewEntryNextNotTargeted.DistanceMax > MiningRange)
@@ -374,7 +415,7 @@ Func<object> InBeltMineStep()
         {
             Host.Log("distance to next roid is too large, putting next free miner on already selected one");
             ModuleToggle(moduleMinerInactive);
-            return null;
+            return nextStep ?? InBeltMineStep;
         }
 
         if (!moving) {
@@ -382,13 +423,22 @@ Func<object> InBeltMineStep()
             approach(asteroidOverviewEntryNext);
         }
     } else {
-        Host.Log("initiate lock asteroid");
+        Host.Log("initiate lock asteroid: " + OreTypeFromAsteroidName(asteroidOverviewEntryNextNotTargeted.Name));
         bool wouldTarget = ListAsteroidOverviewEntry?.EmptyIfNull().Where(
                     t => t.MeTargeting ?? false).IsNullOrEmpty() ?? true;
         if (wouldTarget) executeLock(asteroidOverviewEntryNextNotTargeted);
     }
 
-    return InBeltMineStep;
+    return nextStep ?? InBeltMineStep;
+}
+
+double asteroidPreferenceWeight(string type, double distance = 0.0)
+{
+  double typeWeight = 0.1; // default for unknowns
+  asteroidValue.TryGetValue(type, out typeWeight);
+  var weight = typeWeight - distance * distanceFineWeight;
+  //Host.Log("Asteroid weight: " + weight + " / " + type + " / " + distance);
+  return weight;
 }
 
 void executeApproach(IUIElement overviewEntry) {
@@ -396,6 +446,7 @@ void executeApproach(IUIElement overviewEntry) {
 }
 
 void executeOrbit(IUIElement overviewEntry) {
+    if (null == overviewEntry) return;
     Host.Log("Orbitting: " + overviewEntry?.Id);
     Sanderling.MouseMove(overviewEntry);
     Sanderling.KeyDown(VirtualKeyCode.VK_W);
@@ -405,17 +456,18 @@ void executeOrbit(IUIElement overviewEntry) {
     //ClickThroughMenuPath(overviewEntry, new string[] {"orbit", "500.*"});
 }
 
-void executeLock(IUIElement overviewEntry) {
-        //Host.Log("Locking. Id: " + overviewEntry.Id + "; InTreeIndex: " + overviewEntry.InTreeIndex + "; ChildLastInTreeIndex: " + overviewEntry.ChildLastInTreeIndex);
+void executeLock(IUIElement overviewEntry, bool unlock = false) {
     var id = overviewEntry?.Id;
     if (null == id) {
       Host.Log("overviewEntry is null in executeLock");
       return;
     }
     Sanderling.KeyDown(VirtualKeyCode.CONTROL);
+    if (unlock) Sanderling.KeyDown(VirtualKeyCode.SHIFT);
     Host.Delay(1000); // lock overview distance
     var toLock = WindowOverview.ListView.Entry.Where(t => t.Id == id).FirstOrDefault();
     Sanderling.MouseClickLeft(overviewEntry);
+    if (unlock) Sanderling.KeyUp(VirtualKeyCode.SHIFT);
     Sanderling.KeyUp(VirtualKeyCode.CONTROL);
 }
 
@@ -509,7 +561,10 @@ bool hostileOrNeutralsInLocal => 1 != chatLocal?.ParticipantView?.Entry?.Count(I
 
 //    extract the ore type from the name as seen in overview. "Asteroid (Plagioclase)"
 string OreTypeFromAsteroidName(string AsteroidName)    =>
-    AsteroidName.ValueFromRegexMatchGroupAtIndex(@"Asteroid \(([^\)]+)", 0);
+    AsteroidName.ValueFromRegexMatchGroupAtIndex(@"Asteroid\s?\(([^\)]+)\s?", 1);
+
+string OreTypeFromAsteroidName(string[] AsteroidName) =>
+    OreTypeFromAsteroidName(AsteroidName.Aggregate("", (total, next) => total + next + " "));
 
 void ClickMenuEntryOnMenuRoot(IUIElement MenuRoot, string MenuEntryRegexPattern)
 {
@@ -644,8 +699,12 @@ bool InitiateDockToOrWarpToBookmark(string bookmarkOrFolder)
 
         if (null != approachEntry)
         {
-            Host.Log("found menu entry '" + approachEntry.Text + "'. Assuming we are already there.");
-            return false;
+            if (++dockWarpCanceled <= 5) {
+                Host.Log("found menu entry '" + approachEntry.Text + "'. Assuming we are already there.");
+                return false;
+            }
+            Host.Log("Seems we are already there, but haven't completed the maneuver. Retrying");
+            dockWarpCanceled = 0;
         }
 
         if (null != maneuverMenuEntry)
@@ -672,15 +731,19 @@ bool InitiateDockToOrWarpToBookmark(string bookmarkOrFolder)
 
 void Undock()
 {
-    while(Measurement?.IsDocked ?? true)
-    {
-        Sanderling.MouseClickLeft(Measurement?.WindowStation?.FirstOrDefault()?.UndockButton);
-        Host.Log("waiting for undocking to complete.");
-        Host.Delay(8000);
-    }
-
-    Host.Delay(4444);
-    Sanderling.InvalidateMeasurement();
+  while(Measurement?.IsDocked ?? true && (WindowOverview?.ListView?.Entry?.IsNullOrEmpty() ?? true))
+  {
+  	var undockBtnText = Measurement?.WindowStation?.FirstOrDefault()?.LabelText.FirstOrDefault(
+          candidate => candidate.Text.Contains("Undock"))?.Text;
+  	if (!(undockBtnText?.Contains("Abort") ?? true)) {
+  		Sanderling.MouseClickLeft(Measurement?.WindowStation?.FirstOrDefault()?.UndockButton);
+  	}
+  	Host.Log("waiting for undocking to complete.");
+  	Host.Delay(3333);
+  }
+  dockWarpCanceled = 0;
+  Host.Delay(2222);
+  Sanderling.InvalidateMeasurement();
 }
 
 void ModuleMeasureAllTooltip()
@@ -689,7 +752,8 @@ void ModuleMeasureAllTooltip()
 
     for (;;)
     {
-        var NextModule = Sanderling.MemoryMeasurementAccu?.Value?.ShipUiModule?.FirstOrDefault(m => null == m?.TooltipLast);
+        var NextModule = Sanderling.MemoryMeasurementAccu?.Value?
+            .ShipUiModule?.FirstOrDefault(m => null == m?.TooltipLast?.Value);
 
         if(null == NextModule)
             break;
@@ -720,7 +784,8 @@ void ModuleToggle(Sanderling.Accumulation.IShipUiModule Module)
 {
     var ToggleKey = Module?.TooltipLast?.Value?.ToggleKey;
 
-    Host.Log("toggle module using " + (null == ToggleKey ? "mouse" : Module?.TooltipLast?.Value?.ToggleKeyTextLabel?.Text));
+    Host.Log("toggle module using " +
+          (null == ToggleKey ? "mouse" : Module?.TooltipLast?.Value?.ToggleKeyTextLabel?.Text));
 
     if(null == ToggleKey)
         Sanderling.MouseClickLeft(Module);
@@ -734,8 +799,8 @@ void EnsureOverviewTypeSelectionLoaded()
         return;
 
     if(!string.Equals(OverviewPresetTabActive.Label.Text, OverviewTab, StringComparison.OrdinalIgnoreCase)) {
-        var MiningTab = WindowOverview?.PresetTab.Where(
-                    tab => string.Equals(tab.Label.Text, OverviewTab, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
+        var MiningTab = WindowOverview?.PresetTab.Where(tab => string.Equals(
+              tab.Label.Text, OverviewTab, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
         if (null != MiningTab) {
             Sanderling.MouseClickLeft(MiningTab);
         } else {
@@ -794,7 +859,7 @@ void RetreatUpdate()
 
 void OffloadCountUpdate()
 {
-    var    OreHoldFillPercentSynced    = OreHoldFillPercent;
+    var OreHoldFillPercentSynced = OreHoldFillPercent;
 
     if(!OreHoldFillPercentSynced.HasValue)
         return;
@@ -810,3 +875,38 @@ bool IsNeutralOrEnemy(IChatParticipantEntry participantEntry) =>
      new[] { "good standing", "excellent standing", "Pilot is in your (fleet|corporation)", }
      .Any(goodStandingText =>
         flagIcon?.HintText?.RegexMatchSuccessIgnoreCase(goodStandingText) ?? false)) ?? false);
+
+        IEnumerable<Parse.IOverviewEntry> RoidsInRange(IEnumerable<Parse.IOverviewEntry> roids = null)
+        {
+          var initialSet = roids ?? ListAsteroidOverviewEntry?.EmptyIfNull();
+          // we usually orbit, so range may fluctuate and we need to be conservative
+          return initialSet.Where(aster => aster.DistanceMin < (MiningRange - 2000));
+        }
+
+long lastReeval = Host.GetTimeContinuousMilli();
+int ReevaluateTargettedRoids()
+{
+  if (Host.GetTimeContinuousMilli() - lastReeval > 45000)
+  {
+    lastReeval = Host.GetTimeContinuousMilli();
+    var leastValue = SetTargetAsteroid?.EmptyIfNull().Min(
+                target => asteroidPreferenceWeight(OreTypeFromAsteroidName(target.TextRow)));
+
+    var mostValueOtherAster = RoidsInRange().Where(roid => !((roid?.MeTargeted ?? false) || (roid?.MeTargeting ?? false))).
+          OrderByDescending(roid => asteroidPreferenceWeight(OreTypeFromAsteroidName(roid.Name))).FirstOrDefault();
+    var otherVal = asteroidPreferenceWeight(OreTypeFromAsteroidName(mostValueOtherAster.Name));
+
+    Host.Log("Least valued targetted: " + leastValue + "; Most valued available: " + otherVal);
+
+    if (otherVal > leastValue)
+    {
+      var leastValueRoid = SetTargetAsteroid?.EmptyIfNull().OrderBy(
+                  target => asteroidPreferenceWeight(OreTypeFromAsteroidName(target.TextRow))).FirstOrDefault();
+      Sanderling.MouseClickLeft(leastValueRoid.Assigned?.FirstOrDefault());
+      executeLock(leastValueRoid, true); // unlock
+      executeLock(mostValueOtherAster);
+      return 2222;
+    }
+  }
+  return 7777;
+}
