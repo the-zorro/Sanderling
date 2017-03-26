@@ -9,7 +9,7 @@
     <AppDesignerFolder>Properties</AppDesignerFolder>
     <RootNamespace>Sanderling</RootNamespace>
     <AssemblyName>Sanderling</AssemblyName>
-    <TargetFrameworkVersion>v4.6</TargetFrameworkVersion>
+    <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <TargetFrameworkProfile />
   </PropertyGroup>
@@ -73,6 +73,9 @@
       <Private>True</Private>
     </Reference>
     <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Process.Measurement">
+      <HintPath>..\..\..\lib\Process.Measurement.dll</HintPath>
+    </Reference>
     <Reference Include="Sanderling.Interface">
       <HintPath>..\..\..\lib.intermediate\Sanderling.Interface.dll</HintPath>
     </Reference>
@@ -195,6 +198,19 @@
     <Compile Include="Interface\MemoryMeasurementEvaluation.cs" />
     <Compile Include="Log\LogEntry.cs" />
     <Compile Include="Log\LogExtension.cs" />
+    <Compile Include="MemoryReading\EveOnline.cs" />
+    <Compile Include="MemoryReading\ProcessSampleMemoryReader.cs" />
+    <Compile Include="MemoryReading\Static.cs" />
+    <Compile Include="MemoryReading\WinApi\Kernel32.cs" />
+    <Compile Include="MemoryReading\MemoryReader.cs" />
+    <Compile Include="MemoryReading\WindowsProcessMemoryReader.cs" />
+    <Compile Include="MemoryReading\Python\PythonMemoryReader.cs" />
+    <Compile Include="MemoryReading\Python\PyDict.cs" />
+    <Compile Include="MemoryReading\Python\PyList.cs" />
+    <Compile Include="MemoryReading\Python\PyObject.cs" />
+    <Compile Include="MemoryReading\Python\PyStr.cs" />
+    <Compile Include="MemoryReading\Python\PyType.cs" />
+    <Compile Include="MemoryReading\Python\UITreeNode.cs" />
     <Compile Include="Motor\Extension.cs" />
     <Compile Include="Motor\Motion.cs" />
     <Compile Include="Motor\MotionParamExtension.cs" />
@@ -231,15 +247,26 @@
     <Compile Include="Script\ToScriptExtension.cs" />
     <Compile Include="InterfaceAppManager.cs" />
     <Compile Include="Script\IHostToScript.cs" />
+    <Compile Include="Sensor.cs" />
     <Compile Include="UIStatic.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="app.config" />
-    <None Include="packages.config" />
+    <None Include="app.config">
+      <SubType>Designer</SubType>
+    </None>
+    <None Include="packages.config">
+      <SubType>Designer</SubType>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Analyzer Include="..\packages\Microsoft.CodeAnalysis.Analyzers.1.1.0\analyzers\dotnet\cs\Microsoft.CodeAnalysis.Analyzers.dll" />
     <Analyzer Include="..\packages\Microsoft.CodeAnalysis.Analyzers.1.1.0\analyzers\dotnet\cs\Microsoft.CodeAnalysis.CSharp.Analyzers.dll" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Sanderling.MemoryReading\Sanderling.MemoryReading.csproj">
+      <Project>{2a04e046-2908-400a-9efa-a49884b5d691}</Project>
+      <Name>Sanderling.MemoryReading</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
