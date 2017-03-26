@@ -59,7 +59,7 @@ dlldata.c
 *.svclog
 *.scc
 
-# Chutzpah Test files
+8# Chutzpah Test files
 _Chutzpah*
 
 # Visual C++ cache files
@@ -163,6 +163,7 @@ ClientBin/
 *.publishsettings
 node_modules/
 bower_components/
+*.DotSettings
 
 # RIA/Silverlight projects
 Generated_Code/
